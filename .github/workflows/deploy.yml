@@ -1,0 +1,75 @@
+name: Deploy rakuraku-check.com
+
+# らくらく臨店チェックを独自ドメイン（rakuraku-check.com）で公開する。
+#
+# アプリ本体は azumatori49-max/tori の claude/store-checklist-app-ld80bz ブランチ
+# （rakuraku-check/）が唯一のソース。ここではそれを取得して合成するだけで、
+# このリポジトリにはアプリのコピーを置かない（二重管理を防ぐ）。
+#
+# サイト構成:
+#   /          … 自社用（既定の設定で動作）
+#   /c/<会社ID>/ … 会社別サイト（tori 側 rakuraku-check/companies/<id>/config.js から生成）
+#
+# 起動方法: tori 側の更新後に workflow_dispatch で手動起動（Claude が自動で叩く）。
+# 取りこぼし防止に毎日1回の定期実行も入れてある。
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 21 * * *' # 毎日 6:00 JST（安全網）
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app source (tori branch)
+        uses: actions/checkout@v4
+        with:
+          repository: azumatori49-max/tori
+          ref: claude/store-checklist-app-ld80bz
+
+      - name: Compose site (root app + per-company sites)
+        run: |
+          mkdir -p site
+          find rakuraku-check -maxdepth 1 -type f -exec cp {} site/ \;
+          if [ -d rakuraku-check/companies ]; then
+            for dir in rakuraku-check/companies/*/; do
+              id=$(basename "$dir")
+              out="site/c/$id"
+              mkdir -p "$out"
+              find rakuraku-check -maxdepth 1 -type f -exec cp {} "$out/" \;
+              cp "$dir"config.js "$out/config.js"
+              echo "built company site: $id"
+            done
+          fi
+          touch site/.nojekyll
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
